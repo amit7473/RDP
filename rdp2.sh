@@ -61,20 +61,21 @@ else
     echo "Chrome Remote Desktop is already installed."
 fi
 
-# --- System Configuration ---
-echo "Configuring display manager and session..."
-sudo systemctl disable gdm3.service
-
-if [ ! -f "/etc/chrome-remote-desktop-session" ]; then
-    echo "Configuring Chrome Remote Desktop to use the GNOME session..."
-    sudo tee /etc/chrome-remote-desktop-session > /dev/null <<EOL
-export XDG_SESSION_TYPE=x11
+# --- System Configuration for GNOME ---
+echo "Configuring Chrome Remote Desktop to use the GNOME session..."
+# This is the corrected section to properly start the default Ubuntu desktop
+sudo tee "/home/$username/.chrome-remote-desktop-session" > /dev/null <<EOL
+export DESKTOP_SESSION=ubuntu
+export XDG_SESSION_DESKTOP=ubuntu
 export GNOME_SHELL_SESSION_MODE=ubuntu
 exec /usr/bin/gnome-session
 EOL
-else
-    echo "Chrome Remote Desktop session file already configured."
-fi
+
+# Set correct ownership for the session file
+sudo chown "$username:$username" "/home/$username/.chrome-remote-desktop-session"
+
+# Disable the default display manager to prevent conflicts
+sudo systemctl disable gdm3.service
 
 # --- Autostart Configuration ---
 if [ "$Autostart" = true ]; then
@@ -118,8 +119,8 @@ else
 fi
 
 # --- Service Management ---
-echo "Ensuring Chrome Remote Desktop service is running..."
-sudo service chrome-remote-desktop start
+echo "Restarting Chrome Remote Desktop service to apply changes..."
+sudo systemctl restart chrome-remote-desktop
 
 echo "Finished Successfully. The remote desktop should be available shortly."
 # The infinite loop is generally used to keep a container running.
