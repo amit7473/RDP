@@ -63,7 +63,7 @@ fi
 
 # --- System Configuration for GNOME ---
 echo "Configuring Chrome Remote Desktop to use the GNOME session..."
-# This is the corrected section to properly start the default Ubuntu desktop
+# This configuration correctly starts the default Ubuntu desktop
 sudo tee "/home/$username/.chrome-remote-desktop-session" > /dev/null <<EOL
 export DESKTOP_SESSION=ubuntu
 export XDG_SESSION_DESKTOP=ubuntu
@@ -74,8 +74,8 @@ EOL
 # Set correct ownership for the session file
 sudo chown "$username:$username" "/home/$username/.chrome-remote-desktop-session"
 
-# Disable the default display manager to prevent conflicts
-sudo systemctl disable gdm3.service
+# The command to disable gdm3 is removed as it requires systemd and is not
+# necessary in a containerized environment.
 
 # --- Autostart Configuration ---
 if [ "$Autostart" = true ]; then
@@ -120,7 +120,8 @@ fi
 
 # --- Service Management ---
 echo "Restarting Chrome Remote Desktop service to apply changes..."
-sudo systemctl restart chrome-remote-desktop
+# Use the 'service' command for compatibility, as systemctl is not available.
+sudo service chrome-remote-desktop restart
 
 echo "Finished Successfully. The remote desktop should be available shortly."
 # The infinite loop is generally used to keep a container running.
