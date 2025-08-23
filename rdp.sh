@@ -84,7 +84,7 @@ if [ "$Autostart" = true ]; then
     if [ ! -f "$autostart_file" ]; then
         echo "Creating autostart file..."
         mkdir -p "/home/$username/.config/autostart"
-        link="https://youtu.be/d9ui27vVePY?si=TfVDVQOd0VHjUt_b"
+        link="https://google.com"
         colab_autostart="[Desktop Entry]\nType=Application\nName=Colab\nExec=sh -c 'sensible-browser $link'\nIcon=\nComment=Open a predefined notebook at session signin.\nX-GNOME-Autostart-enabled=true"
         echo -e "$colab_autostart" | sudo tee "$autostart_file"
         sudo chmod +x "$autostart_file"
