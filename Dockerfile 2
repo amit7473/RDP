@@ -1,0 +1,41 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOSTNAME=Nobita
+
+# ---- Base packages (ONE shot, ONE layer) ----
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    wget \
+    git \
+    sudo \
+    docker.io \
+    htop \
+    btop \
+    neovim \
+    lsof \
+    qemu-system \
+    cloud-image-utils \
+    tmate \
+    && rm -rf /var/lib/apt/lists/*
+
+# ---- Install code-server ----
+RUN curl -fsSL https://code-server.dev/install.sh | sh
+
+# ---- Workspace ----
+WORKDIR /workspace
+
+EXPOSE 7860
+
+# ---- Startup command ----
+CMD bash -c '\
+    echo "Starting tmate..." && \
+    tmate -S /tmp/tmate.sock new-session -d && \
+    tmate -S /tmp/tmate.sock wait tmate-ready && \
+    echo "================ TMATE SESSION =================" && \
+    echo "SSH :" && tmate -S /tmp/tmate.sock display -p "#{tmate_ssh}" && \
+    echo "WEB :" && tmate -S /tmp/tmate.sock display -p "#{tmate_web}" && \
+    echo "================================================" && \
+    code-server --bind-addr 0.0.0.0:7860 --auth none \
+'
