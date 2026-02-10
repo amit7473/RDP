@@ -13,74 +13,76 @@ fi
 create_user() {
     echo "Please visit http://remotedesktop.google.com/headless and copy the command after Authentication"
     read -p "Paste the CRD SSH command here: " CRD
-    echo "Creating User and Setting it up"
-    username="user"
+    
+    username="disala"
     password="root"
     Pin="123456"
     
-    useradd -m "$username"
+    echo "Creating User: $username"
+    useradd -m -s /bin/bash "$username"
     adduser "$username" sudo
-    echo "$username:$password" | sudo chpasswd
-    sed -i 's/\/bin\/sh/\/bin\/bash/g' /etc/passwd
+    echo "$username:$password" | chpasswd
 
-    # Add PATH update to .bashrc of the new user
-    echo 'export PATH=$PATH:/home/user/.local/bin' >> /home/"$username"/.bashrc
-    
-    echo "User '$username' created and configured."
+    # Add PATH update to .bashrc
+    echo 'export PATH=$PATH:/home/'"$username"'/.local/bin' >> /home/"$username"/.bashrc
 }
 
-# Extra storage setup
+# Extra storage setup (Fixed the "permission denied" error)
 setup_storage() {
+    local user=$1
     mkdir -p /storage
     chmod 777 /storage
-    chown "$username":"$username" /storage
-    mkdir -p /home/"$username"/storage
-    mount --bind /storage /home/"$username"/storage
+    mkdir -p /home/"$user"/storage
+    # Using sudo to ensure mount works
+    mount --bind /storage /home/"$user"/storage
+    chown -R "$user":"$user" /home/"$user"/storage
 }
 
 # Function to install and configure RDP
 setup_rdp() {
     echo "Updating system..."
-    apt update && apt upgrade -y
+    apt update
 
     echo "Installing Google Chrome"
     wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-    dpkg --install google-chrome-stable_current_amd64.deb
-    apt install --assume-yes --fix-broken
+    dpkg --install google-chrome-stable_current_amd64.deb || apt install --assume-yes --fix-broken
     
-    echo "Installing Firefox ESR"
-    add-apt-repository ppa:mozillateam/ppa -y  
-    apt update
-    apt install --assume-yes firefox-esr
-    apt install --assume-yes dbus-x11 dbus 
-
-    echo "Installing dependencies"
-    add-apt-repository universe -y
-    apt install --assume-yes xvfb xserver-xorg-video-dummy xbase-clients python3-packaging python3-psutil python3-xdg libgbm1 libutempter0 libfuse2 nload qbittorrent ffmpeg gpac fonts-lklug-sinhala tmate
-
-    echo "Installing Ubuntu Desktop (GNOME)"
-    # Using --no-install-recommends can save space/time, but for full Ubuntu feel, we use standard install
-    apt install --assume-yes ubuntu-desktop
-    
-    # Configure Chrome Remote Desktop to use GNOME
-    echo "exec /etc/X11/Xsession /usr/bin/gnome-session" > /etc/chrome-remote-desktop-session
-    
-    # Disable the display manager to save resources since we use CRD
-    systemctl disable gdm.service
+    echo "Installing Desktop Environment (GNOME)"
+    # We install a slightly lighter version of Ubuntu Desktop to prevent crashes
+    apt install --assume-yes ubuntu-desktop-minimal 
+    apt install --assume-yes dbus-x11 xserver-xorg-video-dummy gnom-session-common
 
     echo "Installing Chrome Remote Desktop"
     wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-    dpkg --install chrome-remote-desktop_current_amd64.deb
-    apt install --assume-yes --fix-broken
+    dpkg --install chrome-remote-desktop_current_amd64.deb || apt install --assume-yes --fix-broken
 
-    echo "Finalizing"
+    echo "Configuring CRD for GNOME"
+    # CRITICAL: This file tells CRD exactly how to start GNOME
+    cat <<EOF > /etc/chrome-remote-desktop-session
+export $(dbus-launch)
+export DESKTOP_SESSION=ubuntu
+export GNOME_SHELL_SESSION_MODE=ubuntu
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_TYPE=x11
+exec gnome-session
+EOF
+
+    # Stop and disable the local display manager to prevent conflicts
+    systemctl stop gdm3 || true
+    systemctl disable gdm3 || true
+
+    echo "Finalizing User Permissions"
     adduser "$username" chrome-remote-desktop
     
-    # Start the CRD service for the user
-    su - "$username" -c "$CRD --pin=$Pin"
-    service chrome-remote-desktop start
-    
+    # Run the CRD setup as the new user
+    # Note: Using -l to ensure the full environment is loaded
+    su -l "$username" -c "$CRD --pin=$Pin"
+
+    # Fix for common CRD group issues
+    usermod -aG video,render "$username"
+
     setup_storage "$username"
+    service chrome-remote-desktop restart
 
     echo "RDP setup completed with Ubuntu Desktop"
 }
@@ -92,6 +94,6 @@ setup_rdp
 # Keep-alive loop
 echo "Starting keep-alive loop. Press Ctrl+C to stop."
 while true; do
-    echo "I'm alive"
+    echo "Host is running... $(date)"
     sleep 300
 done
