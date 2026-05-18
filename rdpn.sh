@@ -1,85 +1,134 @@
 #!/bin/bash
+# Exit immediately if a command exits with a non-zero status
+set -e
 
-# Set default username and password
-username="user"
-password="root"
-Pin="123456"
-Autostart=true
-
-echo "Creating User and Setting it up..."
-sudo useradd -m -s /bin/bash "$username" 2>/dev/null
-echo "$username:$password" | sudo chpasswd
-
-# FIX 1: Grant the user passwordless sudo so the Google Host script doesn't crash asking for a password
-sudo usermod -aG sudo "$username"
-echo "$username ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-$username >/dev/null
-sudo chmod 0440 /etc/sudoers.d/90-$username
-
-echo "Installing necessary packages..."
-sudo apt-get update
-export DEBIAN_FRONTEND=noninteractive
-sudo apt-get install -y xfce4 desktop-base xfce4-terminal tightvncserver wget xscreensaver dbus-x11 sudo curl procps
-
-echo "Applying Systemctl Mock for Segfault.net containers..."
-sudo mv /usr/bin/systemctl /usr/bin/systemctl.bak 2>/dev/null
-sudo bash -c 'cat << "EOF" > /usr/bin/systemctl
-#!/bin/bash
-exit 0
-EOF'
-sudo chmod +x /usr/bin/systemctl
-
-echo "Installing Chrome Remote Desktop..."
-wget -q https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-# FIX 2: Use apt-get directly on the .deb file instead of dpkg to force dependency resolution
-sudo apt-get install -y ./chrome-remote-desktop_current_amd64.deb
-
-# Explicitly ensure the group exists (Fixes the "Group does not exist" fatal error)
-sudo groupadd chrome-remote-desktop 2>/dev/null
-sudo usermod -aG chrome-remote-desktop "$username"
-
-echo "Setting up Desktop Environment..."
-sudo bash -c 'echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /etc/chrome-remote-desktop-session'
-
-echo "Installing Google Chrome..."
-wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
-
-echo "Finalizing Autostart..."
-if [ "$Autostart" = true ]; then
-    sudo mkdir -p "/home/$username/.config/autostart"
-    # FIX 3: Use cat instead of echo -e so it writes cleanly regardless of the Linux shell
-    sudo bash -c "cat << 'EOF' > /home/$username/.config/autostart/colab.desktop
-[Desktop Entry]
-Type=Application
-Name=Colab
-Exec=sh -c 'sensible-browser https://youtu.be/d9ui27vVePY?si=TfVDVQOd0VHjUt_b'
-Icon=
-Comment=Open a predefined notebook at session signin.
-X-GNOME-Autostart-enabled=true
-EOF"
-    sudo chmod +x "/home/$username/.config/autostart/colab.desktop"
-    sudo chown -R "$username:$username" "/home/$username/.config"
+# Ensure the script is run as root
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run as root (use sudo)"
+  exit 1
 fi
 
-# Prompt user for CRP value
-echo ""
-read -p "Enter CRP value (from remotedesktop.google.com/headless): " CRP
+# ==========================================
+# 1. Environment and Base Packages
+# ==========================================
+export DEBIAN_FRONTEND=noninteractive
 
-# Start DBus (required for XFCE to run properly without systemd)
-sudo mkdir -p /var/run/dbus
-sudo dbus-daemon --system --fork 2>/dev/null
+echo "Updating and upgrading packages..."
+apt-get update
+apt-get upgrade --assume-yes
 
-echo "Registering Host..."
-command="$CRP --pin=$Pin"
-sudo su - "$username" -c "$command"
+echo "Installing base dependencies..."
+apt-get install --assume-yes \
+    curl gpg wget sudo apt-utils xvfb xfce4 xbase-clients desktop-base \
+    vim xscreensaver python-psutil psmisc python3-psutil \
+    xserver-xorg-video-dummy ffmpeg python3-packaging \
+    python3-xdg libutempter0 firefox
 
-echo "Starting Background Service..."
-# Start the background service manually bypassing systemd
-sudo su - "$username" -c "USER=$username INVOCATION_ID=1 /opt/google/chrome-remote-desktop/chrome-remote-desktop --start"
+# ==========================================
+# 2. Add Microsoft & Google Repositories
+# ==========================================
+echo "Adding Microsoft GPG keys and repo..."
+curl -sSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/microsoft.gpg
+mv /tmp/microsoft.gpg /etc/apt/trusted.gpg.d/microsoft.gpg
+echo "deb [arch=amd64] http://packages.microsoft.com/repos/vscode stable main" | tee /etc/apt/sources.list.d/vs-code.list
 
-echo "========================================================"
-echo "Finished Successfully!"
-echo "You can now connect at https://remotedesktop.google.com"
-echo "========================================================"
+echo "Adding Google Chrome GPG keys and repo..."
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
+echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list
 
-while true; do sleep 10; done
+# ==========================================
+# 3. Install Google Chrome & Chrome Remote Desktop
+# ==========================================
+echo "Installing Google Chrome and Chrome Remote Desktop..."
+apt-get update
+apt-get install --assume-yes google-chrome-stable
+
+wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+# dpkg might fail due to missing dependencies, so we catch it and use fix-broken
+dpkg --install chrome-remote-desktop_current_amd64.deb || apt-get install --assume-yes --fix-broken
+rm chrome-remote-desktop_current_amd64.deb
+
+# Set the default X session for Chrome Remote Desktop
+echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /etc/chrome-remote-desktop-session
+
+# ==========================================
+# 4. User Configuration
+# ==========================================
+echo "Setting root password to 'epicminer'..."
+echo 'root:epicminer' | chpasswd
+
+TARGET_USER="myuser"
+
+echo "Creating user '$TARGET_USER'..."
+if ! id "$TARGET_USER" &>/dev/null; then
+    adduser --disabled-password --gecos '' "$TARGET_USER"
+fi
+
+# Ensure home directory exists and permissions are set
+mkhomedir_helper "$TARGET_USER" || true
+
+echo "Configuring sudo privileges and groups..."
+adduser "$TARGET_USER" sudo
+# Safely add NOPASSWD to sudoers instead of directly appending to /etc/sudoers
+echo '%sudo ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/99_nopasswd
+chmod 0440 /etc/sudoers.d/99_nopasswd
+
+usermod -aG chrome-remote-desktop "$TARGET_USER"
+
+# ==========================================
+# 5. User-level Chrome Remote Desktop setup
+# ==========================================
+USER_HOME=$(eval echo "~$TARGET_USER")
+
+echo "Creating user Chrome Remote Desktop config directories..."
+mkdir -p "$USER_HOME/.config/chrome-remote-desktop"
+touch "$USER_HOME/.config/chrome-remote-desktop/host.json"
+
+echo "/usr/bin/pulseaudio --start" > "$USER_HOME/.chrome-remote-desktop-session"
+echo "startxfce4 :1030" >> "$USER_HOME/.chrome-remote-desktop-session"
+
+# Fix ownership for the created files
+chown -R "$TARGET_USER:$TARGET_USER" "$USER_HOME/.config"
+chown "$TARGET_USER:$TARGET_USER" "$USER_HOME/.chrome-remote-desktop-session"
+chmod a+rx "$USER_HOME/.config/chrome-remote-desktop"
+
+# ==========================================
+# 6. Generate the Startup Script (Replaces CMD)
+# ==========================================
+START_SCRIPT="$USER_HOME/start-crd.sh"
+
+cat << 'EOF' > "$START_SCRIPT"
+#!/bin/bash
+if [ -z "$CODE" ] || [ -z "$PIN" ] || [ -z "$HOSTNAME" ]; then 
+    echo "Error: CODE, PIN, and HOSTNAME environment variables must be set."
+    echo "Usage: CODE=\"4/xxx\" PIN=\"123456\" HOSTNAME=\"MyServer\" ./start-crd.sh"
+    exit 1
+fi
+
+# Start the host
+DISPLAY= /opt/google/chrome-remote-desktop/start-host --code="$CODE" --redirect-url="https://remotedesktop.google.com/_/oauthredirect" --name="$HOSTNAME" --pin="$PIN"
+
+# Rename the host file with its MD5 hash equivalent
+HOST_HASH=$(echo -n "$HOSTNAME" | md5sum | cut -c -32)
+FILENAME="$HOME/.config/chrome-remote-desktop/host#${HOST_HASH}.json"
+
+echo "Saving config to $FILENAME"
+cp "$HOME/.config/chrome-remote-desktop/host#"*.json "$FILENAME" 2>/dev/null || true
+
+# Restart the service
+sudo service chrome-remote-desktop stop
+sudo service chrome-remote-desktop start
+
+echo "Chrome Remote Desktop is successfully running with HOSTNAME: $HOSTNAME"
+EOF
+
+chmod +x "$START_SCRIPT"
+chown "$TARGET_USER:$TARGET_USER" "$START_SCRIPT"
+
+echo "=========================================="
+echo "Server Transformation Complete!"
+echo "To start Chrome Remote Desktop, run the following:"
+echo "1. Switch to the user:  su - $TARGET_USER"
+echo "2. Run the start script with your credentials:"
+echo "   CODE=\"4/your-auth-code\" PIN=\"123456\" HOSTNAME=\"your-hostname\" ./start-crd.sh"
+echo "=========================================="
